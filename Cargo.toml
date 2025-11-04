@@ -25,3 +25,9 @@ gst-plugin-version-helper = { version = "0.8" }
 
 [patch.crates-io]
 uvc-sys = { path = "./patches/uvc-sys" }
+glib = { version = "0.21" }
+glib-sys = { version = "0.21" }
+glib-macros = { version = "0.21" }
+gobject-sys = { version = "0.21" }
+gio = { version = "0.21" }
+gio-sys = { version = "0.21" }
