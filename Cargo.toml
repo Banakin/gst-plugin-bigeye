@@ -11,7 +11,7 @@ description = "Rust Tutorial Plugin"
 gst = { package = "gstreamer", git = "https://gitlab.freedesktop.org/gstreamer/gstreamer-rs" }
 gst-base = { package = "gstreamer-base", git = "https://gitlab.freedesktop.org/gstreamer/gstreamer-rs" }
 gst-video = { package = "gstreamer-video", git = "https://gitlab.freedesktop.org/gstreamer/gstreamer-rs" }
-uvc = "0.2.0"
+uvc = { version = "0.2.0", default-features = false }
 
 [lib]
 name = "gstbigeye"
@@ -20,3 +20,6 @@ path = "src/lib.rs"
 
 [build-dependencies]
 gst-plugin-version-helper = {  git = "https://gitlab.freedesktop.org/gstreamer/gst-plugins-rs" }
+
+[patch.crates-io]
+uvc-sys = { path = "./patches/uvc-sys" }

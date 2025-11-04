@@ -15,9 +15,7 @@ use gst_base::prelude::*;
 use gst_base::subclass::base_src::CreateSuccess;
 use gst_base::subclass::prelude::*;
 
-use std::ops::Rem;
-use std::sync::Mutex;
-
+use std::sync::{Arc, Mutex};
 use std::sync::LazyLock;
 
 use uvc;
@@ -28,26 +26,37 @@ static CAT: LazyLock<gst::DebugCategory> = LazyLock::new(|| {
     gst::DebugCategory::new(
         "bigeyesrc",
         gst::DebugColorFlags::empty(),
-        Some("Rust Sine Wave Source"),
+        Some("UVC Webcam Video Source"),
     )
 });
 
-// Stream-specific state, i.e. audio format configuration
-// and sample offset
+// Stream-specific state
+#[allow(dead_code)]
 struct State {
-    context: uvc::Context,
-    stream: uvc::StreamHandle,
+    info: Option<gst_video::VideoInfo>,
+    // Store the entire UVC stack to keep everything alive
+    uvc_context: Option<uvc::Context<'static>>,
+    uvc_device: Option<uvc::Device<'static>>,
+    uvc_device_handle: Option<uvc::DeviceHandle<'static>>,
+    stream: Option<uvc::ActiveStream<'static, Arc<Mutex<Option<Vec<u8>>>>>>,
+    frame_count: u64,
+    // Store the latest frame data from the camera
+    latest_frame: Arc<Mutex<Option<Vec<u8>>>>,
 }
 
 impl Default for State {
     fn default() -> State {
         State {
-            context: None,
+            info: None,
+            uvc_context: None,
+            uvc_device: None,
+            uvc_device_handle: None,
             stream: None,
+            frame_count: 0,
+            latest_frame: Arc::new(Mutex::new(None)),
         }
     }
 }
-
 
 // Struct containing all the element data
 #[derive(Default)]
@@ -55,75 +64,7 @@ pub struct BigEyeSrc {
     state: Mutex<State>,
 }
 
-impl BigEyeSrc {
-    fn load_stream() {
-        let ctx = uvc::Context::new().expect("Could not get context");
-
-        // Get a default device
-        let dev = ctx
-            .find_device(None, None, None)
-            .expect("Could not find device");
-
-        // The device must be opened to create a handle to the device
-        let devh = dev.open().expect("Could not open device");
-
-        // Most webcams support this format
-        let format = uvc::StreamFormat {
-            width: 640,
-            height: 480,
-            fps: 30,
-            format: uvc::FrameFormat::YUYV,
-        };
-
-        // Get the necessary stream information and return
-        devh
-            .get_stream_handle_with_format(format)
-            .expect("Could not open a stream with this format");
-    }
-
-    fn get_frame<F: Float + FromByteSlice>(
-        data: &mut [u8],
-        accumulator_ref: &mut f64,
-        freq: u32,
-        rate: u32,
-        channels: u32,
-        vol: f64,
-    ) {
-        use std::f64::consts::PI;
-
-        // Reinterpret our byte-slice as a slice containing elements of the type
-        // we're interested in. GStreamer requires for raw audio that the alignment
-        // of memory is correct, so this will never ever fail unless there is an
-        // actual bug elsewhere.
-        let data = data.as_mut_slice_of::<F>().unwrap();
-
-        // Convert all our parameters to the target type for calculations
-        let vol: F = NumCast::from(vol).unwrap();
-        let freq = freq as f64;
-        let rate = rate as f64;
-        let two_pi = 2.0 * PI;
-
-        // We're carrying a accumulator with up to 2pi around instead of working
-        // on the sample offset. High sample offsets cause too much inaccuracy when
-        // converted to floating point numbers and then iterated over in 1-steps
-        let mut accumulator = *accumulator_ref;
-        let step = two_pi * freq / rate;
-
-        for chunk in data.chunks_exact_mut(channels as usize) {
-            let value = vol * F::sin(NumCast::from(accumulator).unwrap());
-            for sample in chunk {
-                *sample = value;
-            }
-
-            accumulator += step;
-            if accumulator >= two_pi {
-                accumulator -= two_pi;
-            }
-        }
-
-        *accumulator_ref = accumulator;
-    }
-}
+impl BigEyeSrc {}
 
 // This trait registers our type with the GObject object system and
 // provides the entry points for creating a new instance and setting
@@ -161,9 +102,9 @@ impl ElementImpl for BigEyeSrc {
     fn metadata() -> Option<&'static gst::subclass::ElementMetadata> {
         static ELEMENT_METADATA: LazyLock<gst::subclass::ElementMetadata> = LazyLock::new(|| {
             gst::subclass::ElementMetadata::new(
-                "Sine Wave Source",
-                "Video Source",
-                "Creates a sine wave",
+                "UVC Webcam Source",
+                "Source/Video",
+                "Captures video from UVC webcams using libuvc",
                 "Ray Foxyote <ray@foxyote.com>",
             )
         });
@@ -171,19 +112,17 @@ impl ElementImpl for BigEyeSrc {
         Some(&*ELEMENT_METADATA)
     }
 
-    // Create and add pad templates for our sink and source pad. These
-    // are later used for actually creating the pads and beforehand
-    // already provide information to GStreamer about all possible
-    // pads that could exist for this type.
+    // Create and add pad templates for our source pad
     fn pad_templates() -> &'static [gst::PadTemplate] {
         static PAD_TEMPLATES: LazyLock<Vec<gst::PadTemplate>> = LazyLock::new(|| {
-            // On the src pad, we can produce F32/F64 with any sample rate
-            // and any number of channels
-            let caps = gst_video::VideoCapsBuilder::new_interleaved()
-                .format_list([gst_video::VIDEO_FORMATS_ALL])
+            // Support YUYV format (YUY2) which is what we'll get from most webcams
+            let caps = gst::Caps::builder("video/x-raw")
+                .field("format", "YUY2")
+                .field("width", 640)
+                .field("height", 480)
+                .field("framerate", gst::Fraction::new(30, 1))
                 .build();
-            // The src pad template must be named "src" for basesrc
-            // and specific a pad that is always there
+            
             let src_pad_template = gst::PadTemplate::new(
                 "src",
                 gst::PadDirection::Src,
@@ -217,149 +156,148 @@ impl ElementImpl for BigEyeSrc {
 
 // Implementation of gst_base::BaseSrc virtual methods
 impl BaseSrcImpl for BigEyeSrc {
-    // Called whenever the input/output caps are changing, i.e. in the very beginning before data
-    // flow happens and whenever the situation in the pipeline is changing. All buffers after this
-    // call have the caps given here.
-    //
-    // We simply remember the resulting VideoInfo from the caps to be able to use this for knowing
-    // the sample rate, etc. when creating buffers
+    // Called whenever the input/output caps are changing
     fn set_caps(&self, caps: &gst::Caps) -> Result<(), gst::LoggableError> {
-        use std::f64::consts::PI;
-
         let info = gst_video::VideoInfo::from_caps(caps).map_err(|_| {
             gst::loggable_error!(CAT, "Failed to build `VideoInfo` from caps {}", caps)
         })?;
 
         gst::debug!(CAT, imp = self, "Configuring for caps {}", caps);
 
-        self.obj()
-            .set_blocksize(info.bpf() * (self.settings.lock().unwrap()).samples_per_buffer);
-
-        let settings = *self.settings.lock().unwrap();
         let mut state = self.state.lock().unwrap();
+        state.info = Some(info);
+        drop(state);
 
-        // If we have no caps yet, any old sample_offset and sample_stop will be
-        // in nanoseconds
-        let old_rate = match state.info {
-            Some(ref info) => info.rate() as u64,
-            None => *gst::ClockTime::SECOND,
+        Ok(())
+    }
+
+    // Called when starting, so we can initialize the UVC stream
+    fn start(&self) -> Result<(), gst::ErrorMessage> {
+        gst::info!(CAT, imp = self, "Starting UVC capture");
+
+        let mut state = self.state.lock().unwrap();
+        
+        // Initialize UVC context and device
+        // We need to leak these to get 'static lifetime
+        let ctx = Box::leak(Box::new(uvc::Context::new().map_err(|e| {
+            gst::error_msg!(
+                gst::ResourceError::OpenRead,
+                ["Could not create UVC context: {:?}", e]
+            )
+        })?));
+
+        gst::info!(CAT, imp = self, "UVC context created");
+
+        // Get a default device
+        let dev = Box::leak(Box::new(ctx.find_device(None, None, None).map_err(|e| {
+            gst::error_msg!(
+                gst::ResourceError::NotFound,
+                ["Could not find UVC device: {:?}", e]
+            )
+        })?));
+
+        gst::info!(CAT, imp = self, "UVC device found");
+
+        // Open the device
+        let devh = Box::leak(Box::new(dev.open().map_err(|e| {
+            gst::error_msg!(
+                gst::ResourceError::OpenRead,
+                ["Could not open UVC device: {:?}", e]
+            )
+        })?));
+
+        gst::info!(CAT, imp = self, "UVC device opened");
+
+        // Configure for YUYV format at 640x480@30fps
+        let format = uvc::StreamFormat {
+            width: 640,
+            height: 480,
+            fps: 30,
+            format: uvc::FrameFormat::YUYV,
         };
 
-        // Update sample offset and accumulator based on the previous values and the
-        // sample rate change, if any
-        let old_sample_offset = state.sample_offset;
-        let sample_offset = old_sample_offset
-            .mul_div_floor(info.rate() as u64, old_rate)
-            .unwrap();
+        // Get stream handle
+        let streamh = Box::leak(Box::new(devh.get_stream_handle_with_format(format).map_err(|e| {
+            gst::error_msg!(
+                gst::ResourceError::Settings,
+                ["Could not open stream with format: {:?}", e]
+            )
+        })?));
 
-        let old_sample_stop = state.sample_stop;
-        let sample_stop =
-            old_sample_stop.map(|v| v.mul_div_floor(info.rate() as u64, old_rate).unwrap());
+        gst::info!(CAT, imp = self, "Stream handle obtained");
 
-        let accumulator =
-            (sample_offset as f64).rem(2.0 * PI * (settings.freq as f64) / (info.rate() as f64));
+        // Start the stream with a callback that stores frame data
+        let latest_frame = state.latest_frame.clone();
+        let frame_counter = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let frame_counter_cb = frame_counter.clone();
+        
+        let stream = streamh
+            .start_stream(
+                move |frame, context| {
+                    // Store the frame data as bytes
+                    let count = frame_counter_cb.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                    if count % 30 == 0 {
+                        eprintln!("UVC callback received frame #{}", count);
+                    }
+                    let mut locked = context.lock().unwrap();
+                    *locked = Some(frame.to_bytes().to_vec());
+                },
+                latest_frame.clone(),
+            )
+            .map_err(|e| {
+                gst::error_msg!(
+                    gst::ResourceError::OpenRead,
+                    ["Could not start UVC stream: {:?}", e]
+                )
+            })?;
 
-        *state = State {
-            info: Some(info),
-            sample_offset,
-            sample_stop,
-            accumulator,
-        };
+        gst::info!(CAT, imp = self, "UVC stream started successfully");
+        eprintln!("UVC stream started, waiting for frames...");
+
+        state.stream = Some(stream);
+        state.frame_count = 0;
 
         drop(state);
 
-        let _ = self
-            .obj()
-            .post_message(gst::message::Latency::builder().src(&*self.obj()).build());
-
+        gst::info!(CAT, imp = self, "Started UVC capture");
         Ok(())
     }
 
-    // Called when starting, so we can initialize all stream-related state to its defaults
-    fn start(&self) -> Result<(), gst::ErrorMessage> {
-        // Reset state
-        *self.state.lock().unwrap() = Default::default();
-        self.unlock_stop()?;
-
-        gst::info!(CAT, imp = self, "Started");
-
-        Ok(())
-    }
-
-    // Called when shutting down the element so we can release all stream-related state
+    // Called when shutting down the element
     fn stop(&self) -> Result<(), gst::ErrorMessage> {
-        // Reset state
-        *self.state.lock().unwrap() = Default::default();
-        self.unlock()?;
-
-        gst::info!(CAT, imp = self, "Stopped");
-
-        Ok(())
-    }
-
-    fn query(&self, query: &mut gst::QueryRef) -> bool {
-        use gst::QueryViewMut;
-
-        match query.view_mut() {
-            // In Live mode we will have a latency equal to the number of samples in each buffer.
-            // We can't output samples before they were produced, and the last sample of a buffer
-            // is produced that much after the beginning, leading to this latency calculation
-            QueryViewMut::Latency(q) => {
-                let settings = *self.settings.lock().unwrap();
-                let state = self.state.lock().unwrap();
-
-                if let Some(ref info) = state.info {
-                    let latency = gst::ClockTime::SECOND
-                        .mul_div_floor(settings.samples_per_buffer as u64, info.rate() as u64)
-                        .unwrap();
-                    gst::debug!(CAT, imp = self, "Returning latency {}", latency);
-                    q.set(settings.is_live, latency, gst::ClockTime::NONE);
-                    true
-                } else {
-                    false
-                }
-            }
-            _ => BaseSrcImplExt::parent_query(self, query),
+        gst::info!(CAT, imp = self, "Stopping UVC capture");
+        
+        let mut state = self.state.lock().unwrap();
+        
+        // Stop the stream (will be dropped automatically)
+        if let Some(stream) = state.stream.take() {
+            stream.stop();
         }
+        
+        // Clear the latest frame
+        *state.latest_frame.lock().unwrap() = None;
+        state.frame_count = 0;
+        
+        drop(state);
+
+        gst::info!(CAT, imp = self, "Stopped UVC capture");
+        Ok(())
     }
 
     fn is_seekable(&self) -> bool {
         false
     }
-
-    fn unlock(&self) -> Result<(), gst::ErrorMessage> {
-        // This should unblock the create() function ASAP, so we
-        // just unschedule the clock it here, if any.
-        gst::debug!(CAT, imp = self, "Unlocking");
-        let mut clock_wait = self.clock_wait.lock().unwrap();
-        if let Some(clock_id) = clock_wait.clock_id.take() {
-            clock_id.unschedule();
-        }
-        clock_wait.flushing = true;
-
-        Ok(())
-    }
-
-    fn unlock_stop(&self) -> Result<(), gst::ErrorMessage> {
-        // This signals that unlocking is done, so we can reset
-        // all values again.
-        gst::debug!(CAT, imp = self, "Unlock stop");
-        let mut clock_wait = self.clock_wait.lock().unwrap();
-        clock_wait.flushing = false;
-
-        Ok(())
-    }
 }
 
 impl PushSrcImpl for BigEyeSrc {
-    // Creates the video buffers
+    // Creates the video buffers from UVC frames
     fn create(
         &self,
         _buffer: Option<&mut gst::BufferRef>,
     ) -> Result<CreateSuccess, gst::FlowError> {
-        // Get a locked reference to our state, i.e. the input and output VideoInfo
-        let mut state = self.state.lock().unwrap();
-        let info = match state.info {
+        let state = self.state.lock().unwrap();
+        
+        let _info = match state.info {
             None => {
                 gst::element_imp_error!(self, gst::CoreError::Negotiation, ["Have no caps yet"]);
                 return Err(gst::FlowError::NotNegotiated);
@@ -367,56 +305,66 @@ impl PushSrcImpl for BigEyeSrc {
             Some(ref info) => info.clone(),
         };
 
-        // If a stop position is set (from a seek), only produce samples up to that
-        // point but at most samples_per_buffer samples per buffer
-        let n_samples = if let Some(sample_stop) = state.sample_stop {
-            if sample_stop <= state.sample_offset {
-                gst::log!(CAT, imp = self, "At EOS");
-                return Err(gst::FlowError::Eos);
-            }
+        let frame_count = state.frame_count;
+        let latest_frame = state.latest_frame.clone();
+        drop(state);  // Release the state lock early
 
-            sample_stop - state.sample_offset
-        } else {
-            settings.samples_per_buffer as u64
+        // Get the latest frame from the camera
+        // Wait for a frame to be available with timeout
+        let frame_data = {
+            let start = std::time::Instant::now();
+            let timeout = std::time::Duration::from_secs(5);
+            
+            loop {
+                let mut latest = latest_frame.lock().unwrap();
+                match latest.take() {
+                    Some(data) => {
+                        gst::trace!(CAT, imp = self, "Got frame data of {} bytes", data.len());
+                        break data;
+                    }
+                    None => {
+                        // No frame available yet, check timeout
+                        if start.elapsed() > timeout {
+                            drop(latest);
+                            gst::error!(CAT, imp = self, "Timeout waiting for frames from UVC device");
+                            return Err(gst::FlowError::Eos);
+                        }
+                        // Wait a bit and retry
+                        drop(latest);
+                        std::thread::sleep(std::time::Duration::from_millis(5));
+                    }
+                }
+            }
         };
 
-        // Allocate a new buffer of the required size, update the metadata with the
-        // current timestamp and duration and then fill it according to the current
-        // caps
-        let mut buffer =
-            gst::Buffer::with_size((n_samples as usize) * (info.bpf() as usize)).unwrap();
+        // Create a GStreamer buffer with the frame data
+        let mut buffer = gst::Buffer::from_slice(frame_data);
+        
         {
-            let buffer = buffer.get_mut().unwrap();
-
-            // Calculate the current timestamp (PTS) and the next one,
-            // and calculate the duration from the difference instead of
-            // simply the number of samples to prevent rounding errors
-            let pts = state
-                .sample_offset
-                .mul_div_floor(*gst::ClockTime::SECOND, info.rate() as u64)
-                .map(gst::ClockTime::from_nseconds)
-                .unwrap();
-            let next_pts = (state.sample_offset + n_samples)
-                .mul_div_floor(*gst::ClockTime::SECOND, info.rate() as u64)
-                .map(gst::ClockTime::from_nseconds)
-                .unwrap();
-            buffer.set_pts(pts);
-            buffer.set_duration(next_pts - pts);
-
-            // Map the buffer writable and create the actual samples
-            let mut map = buffer.map_writable().unwrap();
-            let data = map.as_mut_slice();
-
+            let buffer_ref = buffer.get_mut().unwrap();
             
-            Self::process(
-                data,
-                &mut state.accumulator,
-            );
+            // For live sources, use the current running time for timestamping
+            let obj = self.obj();
+            if let Some(clock) = obj.clock() {
+                if let Some(base_time) = obj.base_time() {
+                    let now = clock.time();
+                    if let Some(pts) = now.checked_sub(base_time) {
+                        buffer_ref.set_pts(pts);
+                    }
+                }
+            }
+            
+            // Set duration based on framerate
+            let fps = 30;
+            let duration = gst::ClockTime::SECOND / fps;
+            buffer_ref.set_duration(duration);
         }
-        state.sample_offset += n_samples;
+        
+        let mut state = self.state.lock().unwrap();
+        state.frame_count += 1;
         drop(state);
 
-        gst::debug!(CAT, imp = self, "Produced buffer {:?}", buffer);
+        gst::log!(CAT, imp = self, "Produced buffer {:?}", buffer);
 
         Ok(CreateSuccess::NewBuffer(buffer))
     }

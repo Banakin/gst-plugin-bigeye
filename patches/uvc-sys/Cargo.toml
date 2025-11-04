@@ -1,0 +1,11 @@
+[package]
+name = "uvc-sys"
+version = "0.2.0"
+authors = ["Amethyst Development Team"]
+license = "Apache-2.0"
+description = "Raw wrapper around libuvc"
+edition = "2018"
+links = "uvc"
+
+[build-dependencies]
+bindgen = "0.69"

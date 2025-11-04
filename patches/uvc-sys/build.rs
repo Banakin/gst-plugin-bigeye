@@ -1,0 +1,21 @@
+extern crate bindgen;
+
+use std::env;
+use std::path::PathBuf;
+
+fn main() {
+    println!("cargo:rustc-link-lib=uvc");
+
+    let bindings = bindgen::Builder::default()
+        .header("wrapper.h")
+        .allowlist_function("uvc_.*")
+        .allowlist_type("uvc_.*")
+        .blocklist_item("uvc_format_desc_union_")
+        .generate()
+        .expect("Failed to generate bindings");
+
+    let out_path = PathBuf::from(env::var("OUT_DIR").unwrap());
+    bindings
+        .write_to_file(out_path.join("uvc_bindings.rs"))
+        .expect("Failed to write bindings");
+}
