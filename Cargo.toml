@@ -2,10 +2,12 @@
 name = "gst-plugin-bigeye"
 version = "0.1.0"
 authors = ["Ray Foxyote <sebastian@centricular.com>"]
-repository = "https://gitlab.freedesktop.org/gstreamer/gst-plugins-rs"
+repository = "https://github.com/Banakin/gst-plugin-bigeye"
+homepage = "https://github.com/Banakin/gst-plugin-bigeye"
 license = "Apache-2.0"
 edition = "2024"
 description = "Rust Tutorial Plugin"
+readme = "README.md"
 
 [dependencies]
 gst = { package = "gstreamer", git = "https://gitlab.freedesktop.org/gstreamer/gstreamer-rs" }

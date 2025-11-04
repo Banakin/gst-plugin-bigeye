@@ -115,12 +115,11 @@ impl ElementImpl for BigEyeSrc {
     // Create and add pad templates for our source pad
     fn pad_templates() -> &'static [gst::PadTemplate] {
         static PAD_TEMPLATES: LazyLock<Vec<gst::PadTemplate>> = LazyLock::new(|| {
-            // Support YUYV format (YUY2) which is what we'll get from most webcams
-            let caps = gst::Caps::builder("video/x-raw")
-                .field("format", "YUY2")
-                .field("width", 640)
-                .field("height", 480)
-                .field("framerate", gst::Fraction::new(30, 1))
+            // Support MJPEG format which is what we're actually outputting
+            let caps = gst::Caps::builder("image/jpeg")
+                .field("width", 800)
+                .field("height", 400)
+                .field("framerate", gst::Fraction::new(90, 1))
                 .build();
             
             let src_pad_template = gst::PadTemplate::new(
@@ -188,8 +187,8 @@ impl BaseSrcImpl for BigEyeSrc {
 
         gst::info!(CAT, imp = self, "UVC context created");
 
-        // Get a default device
-        let dev = Box::leak(Box::new(ctx.find_device(None, None, None).map_err(|e| {
+        // Get a BSB2E
+        let dev = Box::leak(Box::new(ctx.find_device(Some(0x35bd), Some(0x0202), None).map_err(|e| {
             gst::error_msg!(
                 gst::ResourceError::NotFound,
                 ["Could not find UVC device: {:?}", e]
@@ -210,10 +209,10 @@ impl BaseSrcImpl for BigEyeSrc {
 
         // Configure for YUYV format at 640x480@30fps
         let format = uvc::StreamFormat {
-            width: 640,
-            height: 480,
-            fps: 30,
-            format: uvc::FrameFormat::YUYV,
+            width: 800,
+            height: 400,
+            fps: 90,
+            format: uvc::FrameFormat::MJPEG,
         };
 
         // Get stream handle
@@ -236,9 +235,6 @@ impl BaseSrcImpl for BigEyeSrc {
                 move |frame, context| {
                     // Store the frame data as bytes
                     let count = frame_counter_cb.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-                    if count % 30 == 0 {
-                        eprintln!("UVC callback received frame #{}", count);
-                    }
                     let mut locked = context.lock().unwrap();
                     *locked = Some(frame.to_bytes().to_vec());
                 },
