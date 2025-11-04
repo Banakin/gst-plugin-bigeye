@@ -10,9 +10,9 @@ description = "Rust Tutorial Plugin"
 readme = "README.md"
 
 [dependencies]
-gst = { package = "gstreamer", git = "https://gitlab.freedesktop.org/gstreamer/gstreamer-rs" }
-gst-base = { package = "gstreamer-base", git = "https://gitlab.freedesktop.org/gstreamer/gstreamer-rs" }
-gst-video = { package = "gstreamer-video", git = "https://gitlab.freedesktop.org/gstreamer/gstreamer-rs" }
+gst = { package = "gstreamer", version = "0.25" }
+gst-base = { package = "gstreamer-base", version = "0.25" }
+gst-video = { package = "gstreamer-video", version = "0.25" }
 uvc = { version = "0.2.0", default-features = false }
 
 [lib]
