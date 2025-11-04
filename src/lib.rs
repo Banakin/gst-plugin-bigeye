@@ -2,7 +2,10 @@
 
 use gst::glib;
 
-fn plugin_init(_plugin: &gst::Plugin) -> Result<(), glib::BoolError> {
+mod bigeyesrc;
+
+fn plugin_init(plugin: &gst::Plugin) -> Result<(), glib::BoolError> {
+    bigeyesrc::register(plugin)?;
     Ok(())
 }
 
