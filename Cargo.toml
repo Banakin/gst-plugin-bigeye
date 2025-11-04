@@ -21,7 +21,7 @@ crate-type = ["cdylib", "rlib"]
 path = "src/lib.rs"
 
 [build-dependencies]
-gst-plugin-version-helper = {  git = "https://gitlab.freedesktop.org/gstreamer/gst-plugins-rs" }
+gst-plugin-version-helper = { version = "0.8" }
 
 [patch.crates-io]
 uvc-sys = { path = "./patches/uvc-sys" }
