@@ -10,9 +10,9 @@ description = "Rust Tutorial Plugin"
 readme = "README.md"
 
 [dependencies]
-gst = { package = "gstreamer", version = "0.25" }
-gst-base = { package = "gstreamer-base", version = "0.25" }
-gst-video = { package = "gstreamer-video", version = "0.25" }
+gst = { package = "gstreamer", version = "0.24.2" }
+gst-base = { package = "gstreamer-base", version = "0.24.2" }
+gst-video = { package = "gstreamer-video", version = "0.24.2" }
 uvc = { version = "0.2.0", default-features = false }
 
 [lib]
@@ -25,9 +25,3 @@ gst-plugin-version-helper = { version = "0.8" }
 
 [patch.crates-io]
 uvc-sys = { path = "./patches/uvc-sys" }
-glib = { version = "0.21" }
-glib-sys = { version = "0.21" }
-glib-macros = { version = "0.21" }
-gobject-sys = { version = "0.21" }
-gio = { version = "0.21" }
-gio-sys = { version = "0.21" }
