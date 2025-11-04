@@ -1,6 +1,18 @@
 # gst-plugin-bigeye
 A libuvc based plugin for streaming camera data from the Bigscreen Beyond 2e. Unaffiliated with Bigscreen. Inspired by some shortcomings from the [go-bsb-cams](https://github.com/LilliaElaine/go-bsb-cams) project.
 
+## Installation (Fedora)
+```shell
+sudo dnf copr enable rayfoxyote/nobara-42-bsb
+sudo dnf install gst-plugin-bigeye
+```
+*Note: RPM spec files are kept [here](https://github.com/Banakin/Nobara-BSB-RPM-Sources).*
+
+## Usage
+```shell
+gst-launch-1.0 bigeyesrc ! jpegdec ! videoconvert ! autovideosink
+```
+
 ## Errors
 Err:
 ```
