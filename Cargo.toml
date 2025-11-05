@@ -1,12 +1,12 @@
 [package]
 name = "gst-plugin-bigeye"
-version = "0.1.0"
+version = "0.1.1"
 authors = ["Ray Foxyote <sebastian@centricular.com>"]
 repository = "https://github.com/Banakin/gst-plugin-bigeye"
 homepage = "https://github.com/Banakin/gst-plugin-bigeye"
 license = "Apache-2.0"
 edition = "2024"
-description = "Rust Tutorial Plugin"
+description = "Bigscreen Beyond 2e eye tracking video source using libuvc. Plugin is not affiliated with Bigscreen."
 readme = "README.md"
 
 [dependencies]

@@ -1,12 +1,7 @@
-// Copyright (C) 2018 Sebastian Dröge <sebastian@centricular.com>
-//
-// Licensed under the Apache License, Version 2.0 <LICENSE-APACHE or
-// http://www.apache.org/licenses/LICENSE-2.0> or the MIT license
-// <LICENSE-MIT or http://opensource.org/licenses/MIT>, at your
-// option. This file may not be copied, modified, or distributed
-// except according to those terms.
-//
-// SPDX-License-Identifier: MIT OR Apache-2.0
+// Licensed under the Apache License
+// SPDX-License-Identifier: Apache-2.0
+// For examples making GStreamer plugins with Rust, see the following repo:
+// https://github.com/GStreamer/gst-plugins-rs/tree/main/tutorial
 
 use gst::glib;
 use gst::prelude::*;
@@ -20,13 +15,15 @@ use std::sync::LazyLock;
 
 use uvc;
 
-// This module contains the private implementation details of our element
+const WIDTH: i32 = 800;
+const HEIGHT: i32 = 400;
+const FRAMES_SECOND: i32 = 90;
 
 static CAT: LazyLock<gst::DebugCategory> = LazyLock::new(|| {
     gst::DebugCategory::new(
         "bigeyesrc",
         gst::DebugColorFlags::empty(),
-        Some("UVC Webcam Video Source"),
+        Some("Bigscreen Beyond 2e eye tracking video source using libuvc. Plugin is not affiliated with Bigscreen."),
     )
 });
 
@@ -39,7 +36,7 @@ struct State {
     uvc_device: Option<uvc::Device<'static>>,
     uvc_device_handle: Option<uvc::DeviceHandle<'static>>,
     stream: Option<uvc::ActiveStream<'static, Arc<Mutex<Option<Vec<u8>>>>>>,
-    frame_count: u64,
+    
     // Store the latest frame data from the camera
     latest_frame: Arc<Mutex<Option<Vec<u8>>>>,
 }
@@ -52,7 +49,6 @@ impl Default for State {
             uvc_device: None,
             uvc_device_handle: None,
             stream: None,
-            frame_count: 0,
             latest_frame: Arc::new(Mutex::new(None)),
         }
     }
@@ -102,9 +98,9 @@ impl ElementImpl for BigEyeSrc {
     fn metadata() -> Option<&'static gst::subclass::ElementMetadata> {
         static ELEMENT_METADATA: LazyLock<gst::subclass::ElementMetadata> = LazyLock::new(|| {
             gst::subclass::ElementMetadata::new(
-                "UVC Webcam Source",
+                "Bigscreen Beyond 2e eye tracking video source.",
                 "Source/Video",
-                "Captures video from UVC webcams using libuvc",
+                "Bigscreen Beyond 2e eye tracking video source using libuvc. Plugin is not affiliated with Bigscreen.",
                 "Ray Foxyote <ray@foxyote.com>",
             )
         });
@@ -112,16 +108,19 @@ impl ElementImpl for BigEyeSrc {
         Some(&*ELEMENT_METADATA)
     }
 
-    // Create and add pad templates for our source pad
+    // Set source and sink pads.
     fn pad_templates() -> &'static [gst::PadTemplate] {
         static PAD_TEMPLATES: LazyLock<Vec<gst::PadTemplate>> = LazyLock::new(|| {
-            // Support MJPEG format which is what we're actually outputting
+            // Define Capabilities (Caps)
+            // sink: None, this is a source
+            // source: "image/jpeg, width=(int)800, height=(int)400, framerate=(fraction)90/1"
             let caps = gst::Caps::builder("image/jpeg")
-                .field("width", 800)
-                .field("height", 400)
-                .field("framerate", gst::Fraction::new(90, 1))
+                .field("width", WIDTH)
+                .field("height", HEIGHT)
+                .field("framerate", gst::Fraction::new(FRAMES_SECOND, 1))
                 .build();
             
+            // Make source pad template
             let src_pad_template = gst::PadTemplate::new(
                 "src",
                 gst::PadDirection::Src,
@@ -170,48 +169,47 @@ impl BaseSrcImpl for BigEyeSrc {
         Ok(())
     }
 
-    // Called when starting, so we can initialize the UVC stream
+    // Called when starting, so we can initialize the stream
+    // This initializes the UVC context, then gets the device, opens it, creates the stream, and then starts it
+    // Box::leak is a standard function in Rust. It consumes the Box and leaks it onto the heap, so it lives for the duration of the program.
+    // Read more at https://doc.rust-lang.org/std/boxed/struct.Box.html
     fn start(&self) -> Result<(), gst::ErrorMessage> {
-        gst::info!(CAT, imp = self, "Starting UVC capture");
+        gst::info!(CAT, imp = self, "Starting video capture");
 
         let mut state = self.state.lock().unwrap();
         
-        // Initialize UVC context and device
-        // We need to leak these to get 'static lifetime
+        // Initialize context
         let ctx = Box::leak(Box::new(uvc::Context::new().map_err(|e| {
             gst::error_msg!(
                 gst::ResourceError::OpenRead,
-                ["Could not create UVC context: {:?}", e]
+                ["Could not create context: {:?}", e]
             )
         })?));
+        gst::info!(CAT, imp = self, "Context created");
 
-        gst::info!(CAT, imp = self, "UVC context created");
-
-        // Get a BSB2E
+        // Get a BSB2E device using Vendor ID and Product ID
         let dev = Box::leak(Box::new(ctx.find_device(Some(0x35bd), Some(0x0202), None).map_err(|e| {
             gst::error_msg!(
                 gst::ResourceError::NotFound,
-                ["Could not find UVC device: {:?}", e]
+                ["Could not find device: {:?}", e]
             )
         })?));
-
-        gst::info!(CAT, imp = self, "UVC device found");
+        gst::info!(CAT, imp = self, "Device found");
 
         // Open the device
         let devh = Box::leak(Box::new(dev.open().map_err(|e| {
             gst::error_msg!(
                 gst::ResourceError::OpenRead,
-                ["Could not open UVC device: {:?}", e]
+                ["Could not open device: {:?}", e]
             )
         })?));
+        gst::info!(CAT, imp = self, "Device opened");
 
-        gst::info!(CAT, imp = self, "UVC device opened");
-
-        // Configure for YUYV format at 640x480@30fps
+        // Configure for MJPEG format at 800x400@90fps
         let format = uvc::StreamFormat {
-            width: 800,
-            height: 400,
-            fps: 90,
+            width: (WIDTH as u32),
+            height: (HEIGHT as u32),
+            fps: (FRAMES_SECOND as u32),
             format: uvc::FrameFormat::MJPEG,
         };
 
@@ -222,19 +220,14 @@ impl BaseSrcImpl for BigEyeSrc {
                 ["Could not open stream with format: {:?}", e]
             )
         })?));
-
         gst::info!(CAT, imp = self, "Stream handle obtained");
 
         // Start the stream with a callback that stores frame data
-        let latest_frame = state.latest_frame.clone();
-        let frame_counter = Arc::new(std::sync::atomic::AtomicUsize::new(0));
-        let frame_counter_cb = frame_counter.clone();
-        
+        let latest_frame = state.latest_frame.clone();   
         let stream = streamh
             .start_stream(
                 move |frame, context| {
                     // Store the frame data as bytes
-                    let count = frame_counter_cb.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
                     let mut locked = context.lock().unwrap();
                     *locked = Some(frame.to_bytes().to_vec());
                 },
@@ -243,25 +236,25 @@ impl BaseSrcImpl for BigEyeSrc {
             .map_err(|e| {
                 gst::error_msg!(
                     gst::ResourceError::OpenRead,
-                    ["Could not start UVC stream: {:?}", e]
+                    ["Could not start stream: {:?}", e]
                 )
             })?;
 
-        gst::info!(CAT, imp = self, "UVC stream started successfully");
-        eprintln!("UVC stream started, waiting for frames...");
+        gst::info!(CAT, imp = self, "Stream started successfully");
+        eprintln!("Stream started, waiting for frames...");
 
         state.stream = Some(stream);
-        state.frame_count = 0;
 
         drop(state);
 
-        gst::info!(CAT, imp = self, "Started UVC capture");
+        gst::info!(CAT, imp = self, "Started video capture");
         Ok(())
     }
 
     // Called when shutting down the element
+    // Stops the UVC stream and clears the state
     fn stop(&self) -> Result<(), gst::ErrorMessage> {
-        gst::info!(CAT, imp = self, "Stopping UVC capture");
+        gst::info!(CAT, imp = self, "Stopping video capture");
         
         let mut state = self.state.lock().unwrap();
         
@@ -272,11 +265,10 @@ impl BaseSrcImpl for BigEyeSrc {
         
         // Clear the latest frame
         *state.latest_frame.lock().unwrap() = None;
-        state.frame_count = 0;
         
         drop(state);
 
-        gst::info!(CAT, imp = self, "Stopped UVC capture");
+        gst::info!(CAT, imp = self, "Stopped video capture");
         Ok(())
     }
 
@@ -286,22 +278,13 @@ impl BaseSrcImpl for BigEyeSrc {
 }
 
 impl PushSrcImpl for BigEyeSrc {
-    // Creates the video buffers from UVC frames
+    // Creates the video buffer
     fn create(
         &self,
         _buffer: Option<&mut gst::BufferRef>,
     ) -> Result<CreateSuccess, gst::FlowError> {
+        // Get latest frame
         let state = self.state.lock().unwrap();
-        
-        let _info = match state.info {
-            None => {
-                gst::element_imp_error!(self, gst::CoreError::Negotiation, ["Have no caps yet"]);
-                return Err(gst::FlowError::NotNegotiated);
-            }
-            Some(ref info) => info.clone(),
-        };
-
-        let frame_count = state.frame_count;
         let latest_frame = state.latest_frame.clone();
         drop(state);  // Release the state lock early
 
@@ -322,7 +305,7 @@ impl PushSrcImpl for BigEyeSrc {
                         // No frame available yet, check timeout
                         if start.elapsed() > timeout {
                             drop(latest);
-                            gst::error!(CAT, imp = self, "Timeout waiting for frames from UVC device");
+                            gst::error!(CAT, imp = self, "No frame available, waiting...");
                             return Err(gst::FlowError::Eos);
                         }
                         // Wait a bit and retry
@@ -335,7 +318,6 @@ impl PushSrcImpl for BigEyeSrc {
 
         // Create a GStreamer buffer with the frame data
         let mut buffer = gst::Buffer::from_slice(frame_data);
-        
         {
             let buffer_ref = buffer.get_mut().unwrap();
             
@@ -351,14 +333,9 @@ impl PushSrcImpl for BigEyeSrc {
             }
             
             // Set duration based on framerate
-            let fps = 30;
-            let duration = gst::ClockTime::SECOND / fps;
+            let duration = gst::ClockTime::SECOND / (FRAMES_SECOND as u64);
             buffer_ref.set_duration(duration);
         }
-        
-        let mut state = self.state.lock().unwrap();
-        state.frame_count += 1;
-        drop(state);
 
         gst::log!(CAT, imp = self, "Produced buffer {:?}", buffer);
 
