@@ -28,16 +28,10 @@ static CAT: LazyLock<gst::DebugCategory> = LazyLock::new(|| {
 });
 
 // Stream-specific state
-#[allow(dead_code)]
+// #[allow(dead_code)]
 struct State {
     info: Option<gst_video::VideoInfo>,
-    // Store the entire UVC stack to keep everything alive
-    uvc_context: Option<uvc::Context<'static>>,
-    uvc_device: Option<uvc::Device<'static>>,
-    uvc_device_handle: Option<uvc::DeviceHandle<'static>>,
     stream: Option<uvc::ActiveStream<'static, Arc<Mutex<Option<Vec<u8>>>>>>,
-    
-    // Store the latest frame data from the camera
     latest_frame: Arc<Mutex<Option<Vec<u8>>>>,
 }
 
@@ -45,9 +39,6 @@ impl Default for State {
     fn default() -> State {
         State {
             info: None,
-            uvc_context: None,
-            uvc_device: None,
-            uvc_device_handle: None,
             stream: None,
             latest_frame: Arc::new(Mutex::new(None)),
         }
