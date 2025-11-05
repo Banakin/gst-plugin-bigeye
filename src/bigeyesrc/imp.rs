@@ -23,7 +23,7 @@ static CAT: LazyLock<gst::DebugCategory> = LazyLock::new(|| {
     gst::DebugCategory::new(
         "bigeyesrc",
         gst::DebugColorFlags::empty(),
-        Some("Bigscreen Beyond 2e eye tracking video source."),
+        Some("Bigscreen Beyond 2e eye tracking video source using libuvc. Plugin is not affiliated with Bigscreen."),
     )
 });
 
@@ -100,7 +100,7 @@ impl ElementImpl for BigEyeSrc {
             gst::subclass::ElementMetadata::new(
                 "Bigscreen Beyond 2e eye tracking video source.",
                 "Source/Video",
-                "Bigscreen Beyond 2e eye tracking video source using libuvc.",
+                "Bigscreen Beyond 2e eye tracking video source using libuvc. Plugin is not affiliated with Bigscreen.",
                 "Ray Foxyote <ray@foxyote.com>",
             )
         });
